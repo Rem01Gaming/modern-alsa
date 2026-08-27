@@ -139,11 +139,11 @@ namespace detail {
 
 /**
  * @brief CRTP base providing compile-time traits for a sample format.
- * @tparam IsSigned       Signed vs unsigned.
- * @tparam BitDepth       Significant bits (e.g. 24 for S24_LE); packed bit count for DSD.
+ * @tparam IsSigned       True for a signed format, false for unsigned.
+ * @tparam BitDepth       Significant bits. Example: 24 for S24_LE. For DSD, the packed bit count.
  * @tparam ContainerBytes Storage bytes per sample.
- * @tparam LittleEndian   Byte order (8-bit formats report @c true by convention).
- * @tparam IsDsd          Whether this is a DSD bitstream rather than linear PCM.
+ * @tparam LittleEndian   Byte order. By convention, 8-bit formats report true.
+ * @tparam IsDsd          True for a DSD bitstream. False for linear PCM.
  */
 template <bool IsSigned, int BitDepth, int ContainerBytes, bool LittleEndian, bool IsDsd = false>
 struct sample_traits_base {
@@ -346,22 +346,22 @@ struct pcm_config final {
 
     /**
      * @brief Requests SNDRV_PCM_HW_PARAMS_NORESAMPLE.
-     * @note Fails setup() with EINVAL if the requested rate is not natively
-     * supported and the driver would otherwise have resampled to reach it.
+     * @note If the requested rate needs driver resampling, setup() fails with EINVAL instead.
      */
     bool disable_resampling = false;
 
     /**
      * @brief Requests SNDRV_PCM_HW_PARAMS_NO_PERIOD_WAKEUP.
-     * @note Only takes effect if the device advertises SNDRV_PCM_INFO_NO_PERIOD_WAKEUP;
-     * silently ignored otherwise. Combine with an external timer-driven poll loop,
-     * since the driver will not wake the caller on period boundaries.
+     * @note This takes effect only if the device advertises SNDRV_PCM_INFO_NO_PERIOD_WAKEUP.
+     * Otherwise the request is ignored. When enabled, the driver does not wake the caller
+     * at period boundaries. Use an external timer-driven poll loop instead.
      */
     bool disable_period_wakeup = false;
 
     /**
-     * @brief Requests SNDRV_PCM_TSTAMP_ENABLE so pcm::get_timestamp() reflects the
-     * time of the most recent hardware pointer update rather than being left at zero.
+     * @brief Requests SNDRV_PCM_TSTAMP_ENABLE.
+     * @note With this enabled, pcm::get_timestamp() reports the time of the most recent
+     * hardware pointer update. Otherwise it stays at zero.
      */
     bool enable_timestamps = false;
 
@@ -503,9 +503,10 @@ public:
     result drain() noexcept;
 
     /**
-     * @brief Pauses or resumes the stream without discarding buffered data.
+     * @brief Pauses or resumes the stream. Buffered data is kept.
      * @param enable @c true to pause, @c false to resume.
-     * @note ENOSYS if unsupported; check pcm_params::supports_pause() first.
+     * @note Returns ENOSYS if the device does not support this. Check
+     * pcm_params::supports_pause() first.
      */
     result pause(bool enable) noexcept;
 
@@ -545,8 +546,8 @@ public:
 
     /**
      * @brief Reports where one channel's samples live within the mmap'd DMA area.
-     * @note Only meaningful once setup() has negotiated a non-interleaved access mode;
-     * with interleaved access every channel reports the same interleaved layout.
+     * @note This is meaningful only after setup() negotiates a non-interleaved access mode.
+     * With interleaved access, every channel reports the same interleaved layout.
      */
     generic_result<pcm_channel_layout> get_channel_info(size_type channel) const noexcept;
 
@@ -563,33 +564,33 @@ public:
 
     /**
      * @brief Returns the timestamp attached to the last status refresh.
-     * @note Only updated by the driver when pcm_config::enable_timestamps was set at setup() time.
+     * @note The driver updates this only if pcm_config::enable_timestamps was set at setup().
      */
     generic_result<timestamp> get_timestamp() const noexcept;
 
-    /** @brief Which hardware/link clock an @ref extended_timestamp was actually measured against, mirrors SNDRV_PCM_AUDIO_TSTAMP_TYPE_*. */
+    /** @brief Hardware/link clock actually used for an @ref extended_timestamp. Mirrors SNDRV_PCM_AUDIO_TSTAMP_TYPE_*. */
     enum class audio_tstamp_type {
-        compat = 0,           ///< Backward-compatible auto-selection; no accuracy report.
+        compat = 0,           ///< Backward-compatible auto-selection. No accuracy report.
         default_dma = 1,      ///< DMA time, derived from hw_ptr.
-        link = 2,             ///< Link/wallclock counter time, reset on stream start.
-        link_absolute = 3,    ///< Link/wallclock counter time, not reset on stream start.
-        link_estimated = 4,   ///< Link time estimated indirectly.
-        link_synchronized = 5 ///< Link time synchronized with system time.
+        link = 2,             ///< Link/wallclock counter time. Reset on stream start.
+        link_absolute = 3,    ///< Link/wallclock counter time. Not reset on stream start.
+        link_estimated = 4,   ///< Link time, estimated indirectly.
+        link_synchronized = 5 ///< Link time, synchronized with system time.
     };
 
-    /** @brief Result of get_extended_timestamp(): both clock domains plus the driver's accuracy report. */
+    /** @brief Result of get_extended_timestamp(): both clock domains, plus the driver's accuracy report. */
     struct extended_timestamp final {
-        timestamp system;                                          ///< System clock time of this refresh (per pcm_config::tstamp_clock).
-        timestamp audio;                                           ///< Hardware/link time, per requested_type.
-        audio_tstamp_type actual_type = audio_tstamp_type::compat; ///< Type the driver actually reported (may differ from the request).
+        timestamp system;                                          ///< System clock time of this refresh. Set by pcm_config::tstamp_clock.
+        timestamp audio;                                           ///< Hardware/link time, for the requested type.
+        audio_tstamp_type actual_type = audio_tstamp_type::compat; ///< Type the driver actually reported. May differ from the request.
         bool accuracy_valid = false;                               ///< True if accuracy_ns is meaningful.
         unsigned int accuracy_ns = 0;                              ///< Reported accuracy of @ref audio, in nanoseconds.
     };
 
     /**
-     * @brief Requests a hardware/link timestamp type and reads both clock
+     * @brief Requests a hardware/link timestamp type. Reads both clock
      * domains plus the driver's accuracy report (SNDRV_PCM_IOCTL_STATUS_EXT).
-     * @note Always fetches fresh values, unlike the cached get_timestamp().
+     * @note This always fetches fresh values. get_timestamp() returns a cached value instead.
      */
     generic_result<extended_timestamp> get_extended_timestamp(audio_tstamp_type requested_type = audio_tstamp_type::default_dma) const noexcept;
 
@@ -597,9 +598,9 @@ public:
     result open_playback_device(size_type card = 0, size_type device = 0, bool non_blocking = true) noexcept;
 
     /**
-     * @brief Groups this stream with @p other so start()/drop()/etc. on
-     * either substream triggers both (SNDRV_PCM_IOCTL_LINK).
-     * @note Both streams must already be prepared and linkable by the driver.
+     * @brief Groups this stream with @p other. After this call, start(),
+     * drop(), and similar calls on either substream trigger both (SNDRV_PCM_IOCTL_LINK).
+     * @note Both streams must already be prepared, and the driver must support linking them.
      */
     result link(const pcm &other) noexcept;
 
@@ -658,8 +659,8 @@ class noninterleaved_reader {
 public:
     /**
      * @param channel_buffers One destination pointer per channel, in channel order.
-     * @param channel_count   Must equal the channel count negotiated at setup(); a
-     *        mismatch is rejected before the ioctl to avoid an out-of-bounds read.
+     * @param channel_count   Must equal the channel count negotiated at setup().
+     * @note A mismatch is rejected before the ioctl call, to avoid an out-of-bounds read.
      */
     virtual generic_result<size_type> read_unformatted(void *const *channel_buffers, size_type channel_count, size_type frame_count) noexcept = 0;
 };
@@ -687,6 +688,7 @@ public:
     /**
      * @param channel_buffers One source pointer per channel, in channel order.
      * @param channel_count   Must equal the channel count negotiated at setup().
+     * @note A mismatch is rejected before the ioctl call, to avoid an out-of-bounds write.
      */
     virtual generic_result<size_type> write_unformatted(const void *const *channel_buffers, size_type channel_count, size_type frame_count) noexcept = 0;
 };
@@ -750,7 +752,7 @@ public:
 
     /**
      * @brief Applies hardware parameters and maps the DMA buffer.
-     * @note Must be called after open(). The DMA buffer covers config.period_size * config.period_count frames.
+     * @note Call this after open(). The DMA buffer holds config.period_size * config.period_count frames.
      */
     result setup(const pcm_config &config = pcm_config()) noexcept;
 
@@ -758,14 +760,14 @@ public:
      * @brief Obtains a writable slice of the DMA ring buffer.
      *
      * @return mmap_region on success.
-     *         EAGAIN if no space is available (non-blocking).
-     *         EPIPE on underrun (call pcm_recover then retry).
+     *         EAGAIN if no space is available yet (non-blocking mode).
+     *         EPIPE on underrun. Call pcm_recover(), then retry.
      */
     generic_result<mmap_region> begin() noexcept;
 
     /**
      * @brief Advances the application pointer after writing @p frames frames.
-     * @note frames must be <= the avail returned by the preceding begin().
+     * @note frames must not exceed the avail value from the preceding begin() call.
      */
     result commit(size_type frames) noexcept;
 };
@@ -808,8 +810,8 @@ public:
     /**
      * @brief Obtains a readable slice of the DMA ring buffer.
      * @return mmap_region on success.
-     *         EAGAIN if no data is available yet (non-blocking).
-     *         EPIPE on overrun (call pcm_recover then retry).
+     *         EAGAIN if no data is available yet (non-blocking mode).
+     *         EPIPE on overrun. Call pcm_recover(), then retry.
      */
     generic_result<mmap_region> begin() noexcept;
 
@@ -825,8 +827,8 @@ public:
 
 /**
  * @brief Binds to the kernel's SNDRV_TIMER_CLASS_PCM tick source for a PCM
- * substream, giving period-accurate wakeups after pcm_config::disable_period_wakeup
- * has told the driver to stop waking poll() on the audio device fd itself.
+ * substream. This gives period-accurate wakeups after pcm_config::disable_period_wakeup
+ * tells the driver to stop waking poll() on the audio device fd itself.
  */
 class pcm_period_timer final {
     int fd = invalid_fd();
@@ -839,18 +841,18 @@ public:
 
     /**
      * @param card, device, is_capture Must match the PCM substream to follow.
-     * @param subdevice Substream index within the device, usually 0.
+     * @param subdevice Substream index within the device. Usually 0.
      */
     result open(size_type card, size_type device, bool is_capture, size_type subdevice = 0) noexcept;
     void close() noexcept;
     bool is_open() const noexcept;
 
-    /** @brief Raw fd, poll()-able alongside (or instead of) the PCM device fd. */
+    /** @brief Raw fd. Use with poll(), either alongside or instead of the PCM device fd. */
     int get_file_descriptor() const noexcept;
 
     /**
-     * @brief Blocks until at least one period tick has been queued.
-     * @return Number of ticks consumed by this read, or ENOENT if not open.
+     * @brief Blocks until at least one period tick is queued.
+     * @return Number of ticks this read consumed, or ENOENT if not open.
      */
     generic_result<size_type> wait_for_tick() noexcept;
 };
@@ -915,16 +917,16 @@ public:
     /**
      * @brief Tests whether channels, rate, and format are all achievable
      * together in a single hw_params refine.
-     * @note test_format()/test_rate()/test_channels() each check one axis
-     * against the device baseline, so a combination can fail even when
-     * each axis passes individually; prefer this when pinning more than one.
+     * @note test_format(), test_rate(), and test_channels() each check one axis
+     * against the device baseline. A combination can fail even when each axis
+     * passes on its own. Use test_config() when you pin more than one axis.
      */
     bool test_config(size_type channels, size_type rate, sample_format fmt) const noexcept;
 
     /**
-     * @brief Iterates over every sample format the device actually supports.
+     * @brief Iterates over every sample format the device supports.
      * @param callback  Called once per supported format. Must not be null.
-     * @param user_data Forwarded unchanged to every callback invocation.
+     * @param user_data Passed unchanged to every callback call.
      */
     void for_each_supported_format(void (*callback)(sample_format, void *), void *user_data) const noexcept;
 
@@ -964,8 +966,8 @@ public:
 
     /**
      * @brief Raw SNDRV_PCM_INFO_* capability bits from the initial HW_REFINE probe.
-     * @note Decode with the mask constants in <sound/asound.h>, or use the
-     * named predicates below.
+     * @note Decode these with the mask constants in <sound/asound.h>. Or use the
+     * named predicates below instead.
      */
     unsigned int get_capabilities() const noexcept;
 
@@ -1209,16 +1211,15 @@ public:
      * @brief Reads and decodes this control's dB-scale TLV, if it has one.
      * @return dB_range on success.
      *         ENOSYS if has_tlv() is false.
-     *         ENOTSUP if the TLV is a shape this wrapper doesn't decode
-     *         (e.g. SNDRV_CTL_TLVT_DB_RANGE or SNDRV_CTL_TLVT_DB_LINEAR); use
-     *         get_tlv_raw() to inspect those directly.
+     *         ENOTSUP if the TLV shape is one this wrapper does not decode,
+     *         such as SNDRV_CTL_TLVT_DB_RANGE or SNDRV_CTL_TLVT_DB_LINEAR.
+     *         Use get_tlv_raw() to inspect those directly.
      */
     generic_result<dB_range> get_dB_range() const noexcept;
 
     /**
-     * @brief Reads the raw TLV blob (SNDRV_CTL_IOCTL_TLV_READ) for control types this
-     * wrapper doesn't interpret itself, such as channel-map descriptors
-     * (SNDRV_CTL_TLVT_CHMAP_*).
+     * @brief Reads the raw TLV blob (SNDRV_CTL_IOCTL_TLV_READ) for control types.
+     * @note This wrapper doesn't interpret itself, such as channel-map descriptors (SNDRV_CTL_TLVT_CHMAP_*).
      * @param buffer       Destination for the raw 32-bit TLV words (type, length, payload...).
      * @param buffer_words Capacity of @p buffer in 32-bit words.
      * @return Number of words actually written into @p buffer.
@@ -1284,16 +1285,16 @@ public:
 
     /**
      * @brief Creates a user-defined integer control (SNDRV_CTL_IOCTL_ELEM_ADD).
-     * @note Takes effect on the card immediately, but this mixer's own cached control
-     * list is not refreshed; call open() again to see the new control through
-     * get_ctl_by_name()/get_ctl().
+     * @note This takes effect on the card immediately. It does not refresh this
+     * mixer's cached control list. Call open() again to see the new control
+     * through get_ctl_by_name() or get_ctl().
      */
     result add_integer_control(const char *name, long min, long max, long step = 1, size_type count = 1) noexcept;
 
     /**
      * @brief Removes a control previously created with add_integer_control().
-     * @note Only user-defined controls (SNDRV_CTL_ELEM_ACCESS_USER) can be removed;
-     * driver-owned controls return EINVAL, matching the kernel's own restriction.
+     * @note Only user-defined controls (SNDRV_CTL_ELEM_ACCESS_USER) can be removed.
+     * Driver-owned controls return EINVAL. This matches the kernel's own restriction.
      */
     result remove_control(const char *name) noexcept;
 };

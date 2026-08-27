@@ -813,10 +813,11 @@ generic_result<pcm::timestamp> pcm::get_timestamp() const noexcept {
 
 namespace {
 
-// Bit layout fixed by snd_pcm_(un)pack_audio_tstamp_config/_report in the kernel's
-// <sound/pcm.h>: low 16 bits of audio_tstamp_data are the request (type in bits
-// 0-3, report_delay in bit 4); the high 16 bits are the driver's report (valid in
-// bit 16, actual_type in bits 17-20, accuracy_report in bit 21) after the ioctl.
+// Bit layout fixed by snd_pcm_(un)pack_audio_tstamp_config/_report in the
+// kernel's <sound/pcm.h>. audio_tstamp_data holds two parts:
+// - Low 16 bits: the request. Type in bits 0-3, report_delay in bit 4.
+// - High 16 bits: the driver's report, valid after the ioctl call.
+//   Valid flag in bit 16, actual_type in bits 17-20, accuracy_report in bit 21.
 constexpr unsigned int pack_audio_tstamp_request(pcm::audio_tstamp_type requested) noexcept {
     return static_cast<unsigned int>(requested) & 0xFu;
 }
@@ -908,9 +909,9 @@ namespace {
 /**
  * @brief Result of negotiating hw/sw params and mapping the DMA buffer.
  *
- * status_page/control_page are non-null only when the driver allows the
- * lock-free direct path (see needs_explicit_sync below); callers must fall
- * back to SNDRV_PCM_IOCTL_SYNC_PTR when they are null.
+ * status_page and control_page are non-null only when the driver allows the
+ * lock-free direct path (see needs_explicit_sync below). When they are null,
+ * the caller must fall back to SNDRV_PCM_IOCTL_SYNC_PTR.
  */
 struct mmap_setup_result final {
     void *data_ptr = nullptr;
@@ -922,12 +923,16 @@ struct mmap_setup_result final {
 };
 
 /**
- * Maps the status/control pages so hw_ptr/appl_ptr can be exchanged by plain
- * memory access instead of a SYNC_PTR ioctl per period. Only safe when the
- * driver hasn't set SNDRV_PCM_INFO_SYNC_APPLPTR or _EXPLICIT_SYNC in the
- * HW_PARAMS info field; those flags mean the driver needs the explicit ioctl.
- * Returns false (rather than treating mmap failure as fatal) since the
- * ioctl-based fallback in mmap_begin_write/mmap_begin_read/mmap_commit_common is always correct.
+ * Maps the status and control pages, so hw_ptr and appl_ptr can be exchanged by
+ * plain memory access instead of a SYNC_PTR ioctl call per period.
+ *
+ * This is safe only when the driver has not set SNDRV_PCM_INFO_SYNC_APPLPTR or
+ * _EXPLICIT_SYNC in the HW_PARAMS info field. Those flags mean the driver needs
+ * the explicit ioctl call instead.
+ *
+ * This function returns false on mmap failure, not a fatal error, because the
+ * ioctl-based fallback in mmap_begin_write, mmap_begin_read, and
+ * mmap_commit_common always works correctly.
  */
 bool try_map_direct_pointers(int fd, unsigned int hw_params_info, void **out_status, void **out_control) noexcept {
     constexpr unsigned int explicit_sync_flags = SNDRV_PCM_INFO_SYNC_APPLPTR | SNDRV_PCM_INFO_EXPLICIT_SYNC;
@@ -954,9 +959,9 @@ int mmap_setup_common(int fd, const pcm_config &config, sample_access access, bo
     auto sw_params = to_alsa_sw_params(config, is_capture);
     if (ioctl(fd, SNDRV_PCM_IOCTL_SW_PARAMS, &sw_params) < 0) return errno;
 
-    // Derive sizes from the requested (exact) config.
-    // Because we set integer=1 with min==max, the negotiated values equal
-    // what we requested, or HW_PARAMS would have failed.
+    // Derive sizes from the requested (exact) config. Setting integer=1 with
+    // min==max forces the negotiated values to equal the request, or
+    // HW_PARAMS would have failed.
     size_type buffer_frames = config.period_size * config.period_count;
     size_type frame_bytes = bytes_per_frame(config.format, config.channels);
     if (frame_bytes == 0) return EINVAL;
@@ -987,8 +992,8 @@ void mmap_teardown_common(void *ptr, void *status_page, void *control_page, size
 
 /**
  * Given a fresh hw_ptr, computes the writable slice of the ring buffer.
- * Shared by both the direct-mmap and SYNC_PTR-ioctl paths so the xrun/wrap
- * math exists in exactly one place.
+ * Both the direct-mmap and SYNC_PTR-ioctl paths call this, so the xrun and
+ * wrap math exists in exactly one place.
  */
 int compute_write_region(
     size_type hw_ptr, size_type appl_ptr, size_type buffer_frames, size_type boundary, size_type frame_bytes, void *mmap_data, mmap_region *out) noexcept {
@@ -1048,8 +1053,9 @@ void write_appl_ptr_direct(void *control_page, size_type value) noexcept {
 int mmap_begin_write(
     int fd, size_type appl_ptr, size_type buffer_frames, size_type boundary, size_type frame_bytes, void *mmap_data, mmap_region *out) noexcept {
     snd_pcm_sync_ptr sptr{};
-    // APPL flag must stay set: it means "read the driver's appl_ptr back",
-    // not "apply ours" (which is 0 here and would reset the driver's pointer).
+    // The APPL flag must stay set. Set, it means "read the driver's appl_ptr
+    // back". Clear, it means "apply ours", which is 0 here and would reset
+    // the driver's pointer.
     sptr.flags = SNDRV_PCM_SYNC_PTR_HWSYNC | SNDRV_PCM_SYNC_PTR_APPL;
     if (ioctl(fd, SNDRV_PCM_IOCTL_SYNC_PTR, &sptr) < 0) [[unlikely]] {
         return errno;
@@ -1074,8 +1080,8 @@ int mmap_commit_common(int fd, size_type *appl_ptr, size_type frames, size_type 
     if (*appl_ptr >= boundary) *appl_ptr -= boundary;
 
     snd_pcm_sync_ptr sptr{};
-    // APPL flag must stay clear here: clear is what makes the kernel apply
-    // (write) appl_ptr below instead of just echoing its own value back.
+    // The APPL flag must stay clear here. Clear, it makes the kernel write
+    // appl_ptr below. Set, the kernel would only echo its own value back.
     sptr.flags = 0;
     sptr.c.control.appl_ptr = *appl_ptr;
     sptr.c.control.avail_min = avail_min;
@@ -1689,18 +1695,18 @@ generic_result<size_type> pcm_params::get_max_buffer_size() const noexcept {
 result pcm_recover(pcm &p, int err, bool silent) noexcept {
     (void)silent;
 
-    // EAGAIN means "no frames available right now" in non-blocking mode.
-    // The stream is not broken, so running PREPARE here would needlessly
-    // drop buffered audio; just report it back to the caller to retry.
+    // EAGAIN means no frames are available right now, in non-blocking mode.
+    // The stream is not broken. Running PREPARE here would needlessly drop
+    // buffered audio, so this function reports EAGAIN back to the caller to retry.
     if (err == EAGAIN) return {EAGAIN};
 
     if (err == EPIPE) return p.prepare();
 
     if (err == ESTRPIPE) {
-        // Kernel-suspended device (e.g. system sleep). Per the ALSA
-        // suspend/resume protocol, try RESUME first so buffered audio and
-        // stream position survive; only fall back to PREPARE (which drops
-        // buffered audio) if the driver has no resume support.
+        // The device is suspended by the kernel, for example during system
+        // sleep. Per the ALSA suspend/resume protocol, try RESUME first, so
+        // buffered audio and stream position survive. Fall back to PREPARE,
+        // which drops buffered audio, only if the driver has no resume support.
         int fd = p.get_file_descriptor();
         int r;
         for (;;) {
@@ -2020,8 +2026,8 @@ generic_result<mixer_ctl::dB_range> mixer_ctl::get_dB_range() const noexcept {
             return R{0, out};
 
         default:
-            // DB_RANGE (piecewise) and DB_LINEAR shapes need the full payload
-            // decoded by the caller; get_tlv_raw() exposes it unmodified.
+            // DB_RANGE (piecewise) and DB_LINEAR shapes need the caller to decode
+            // the full payload. get_tlv_raw() exposes it unmodified.
             return R{ENOTSUP};
     }
 }
@@ -2079,9 +2085,9 @@ result mixer_ctl::set_tlv_raw(const unsigned int *buffer, size_type buffer_words
 class mixer_impl {
     friend class mixer;
     int fd = invalid_fd();
-    // We use raw storage + explicit construction so we never realloc a
-    // non-trivially-copyable type (mixer_ctl declares a move constructor,
-    // which makes realloc unsafe per [class.copy]).
+    // This class uses raw storage and explicit construction, to avoid a
+    // realloc of a non-trivially-copyable type. mixer_ctl declares a move
+    // constructor, which makes realloc unsafe per [class.copy].
     mixer_ctl *ctls = nullptr;
     size_type num_ctls = 0;
     size_type cap_ctls = 0;
@@ -2254,8 +2260,8 @@ result mixer::open(size_type card) noexcept {
 void mixer::close() noexcept {
     if (!self) return;
 
-    // Free enum name buffers and explicitly destruct each control before
-    // releasing the raw storage (no implicit destructor calls with operator delete).
+    // Free enum name buffers, then explicitly destruct each control before
+    // releasing the raw storage. operator delete does not call destructors.
     for (size_type i = 0; i < self->num_ctls; ++i) {
         free(self->ctls[i].enum_names_);
         self->ctls[i].enum_names_ = nullptr;
