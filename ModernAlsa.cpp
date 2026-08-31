@@ -66,6 +66,10 @@ struct mask_ref final {
 
     static constexpr void set(snd_pcm_hw_params &hw_params, value_type value) noexcept {
         static_assert(!out_of_range(), "Not a mask parameter.");
+
+        // ALSA format/access enums are < 64, and bits[] has exactly 2 elements
+        [[assume(value < 64)]]; 
+
         auto &mask = hw_params.masks[param - SNDRV_PCM_HW_PARAM_FIRST_MASK];
         mask.bits[0] = 0;
         mask.bits[1] = 0;
@@ -74,6 +78,10 @@ struct mask_ref final {
 
     static constexpr bool test(const snd_pcm_hw_params &hw_params, value_type value) noexcept {
         static_assert(!out_of_range(), "Not a mask parameter.");
+
+        // ALSA format/access enums are < 64, and bits[] has exactly 2 elements
+        [[assume(value < 64)]]; 
+
         const auto &mask = hw_params.masks[param - SNDRV_PCM_HW_PARAM_FIRST_MASK];
         return !!(mask.bits[value >> 5] & (1u << (value & 31)));
     }
@@ -449,6 +457,9 @@ const char *to_string(sample_format sf) noexcept {
 }
 
 size_type bytes_per_frame(sample_format fmt, size_type channels) noexcept {
+    // Prevent overflow checks on 32-bit platforms
+    [[assume(channels <= 256)]];
+
     size_type bps = 0;
     switch (fmt) {
         case sample_format::s8:
@@ -1001,8 +1012,11 @@ void mmap_teardown_common(void *ptr, void *status_page, void *control_page, size
  * Both the direct-mmap and SYNC_PTR-ioctl paths call this, so the xrun and
  * wrap math exists in exactly one place.
  */
-int compute_write_region(
-    size_type hw_ptr, size_type appl_ptr, size_type buffer_frames, size_type boundary, size_type frame_bytes, void *mmap_data, mmap_region *out) noexcept {
+int compute_write_region(size_type hw_ptr, size_type appl_ptr, size_type buffer_frames, size_type boundary, size_type frame_bytes, void *mmap_data, mmap_region *out) noexcept {
+    // Pointers are strictly bounded by the kernel/library contract
+    [[assume(appl_ptr < boundary)]];
+    [[assume(hw_ptr < boundary)]];
+
     size_type used = (appl_ptr >= hw_ptr) ? (appl_ptr - hw_ptr) : (boundary - (hw_ptr - appl_ptr));
     if (used > buffer_frames) [[unlikely]] { // underrun
         return EPIPE;
@@ -1024,8 +1038,11 @@ int compute_write_region(
 }
 
 /** @brief Given a fresh hw_ptr, computes the readable slice of the ring buffer. */
-int compute_read_region(
-    size_type hw_ptr, size_type appl_ptr, size_type buffer_frames, size_type boundary, size_type frame_bytes, void *mmap_data, mmap_region *out) noexcept {
+int compute_read_region(size_type hw_ptr, size_type appl_ptr, size_type buffer_frames, size_type boundary, size_type frame_bytes, void *mmap_data, mmap_region *out) noexcept {
+    // Pointers are strictly bounded by the kernel/library contract
+    [[assume(appl_ptr < boundary)]];
+    [[assume(hw_ptr < boundary)]];
+
     size_type avail = (hw_ptr >= appl_ptr) ? (hw_ptr - appl_ptr) : (boundary - (appl_ptr - hw_ptr));
     if (avail > buffer_frames) [[unlikely]] { // overrun
         return EPIPE;
@@ -1082,6 +1099,11 @@ int mmap_begin_read(
 }
 
 int mmap_commit_common(int fd, size_type *appl_ptr, size_type frames, size_type boundary, size_type avail_min) noexcept {
+    // frames is derived from avail (<= buffer_frames <= boundary)
+    [[assume(frames <= boundary)]];
+    // appl_ptr is strictly < boundary before this addition
+    [[assume(*appl_ptr < boundary)]];
+
     *appl_ptr += frames;
     if (*appl_ptr >= boundary) *appl_ptr -= boundary;
 
@@ -1155,6 +1177,11 @@ generic_result<mmap_region> mmap_pcm_writer::begin() noexcept {
 
 result mmap_pcm_writer::commit(size_type frames) noexcept {
     if (has_direct_pointers_) {
+        // frames is derived from avail (<= buffer_frames <= boundary_)
+        [[assume(frames <= boundary_)]];
+        // appl_ptr_ is strictly < boundary_ before this addition
+        [[assume(appl_ptr_ < boundary_)]];
+
         appl_ptr_ += frames;
         if (appl_ptr_ >= boundary_) appl_ptr_ -= boundary_;
         write_appl_ptr_direct(control_page_, appl_ptr_);
@@ -1218,6 +1245,11 @@ generic_result<mmap_region> mmap_pcm_reader::begin() noexcept {
 
 result mmap_pcm_reader::commit(size_type frames) noexcept {
     if (has_direct_pointers_) {
+        // frames is derived from avail (<= buffer_frames <= boundary_)
+        [[assume(frames <= boundary_)]];
+        // appl_ptr_ is strictly < boundary_ before this addition
+        [[assume(appl_ptr_ < boundary_)]];
+
         appl_ptr_ += frames;
         if (appl_ptr_ >= boundary_) appl_ptr_ -= boundary_;
         write_appl_ptr_direct(control_page_, appl_ptr_);
