@@ -1249,6 +1249,14 @@ public:
 
 class mixer_impl;
 
+/** @brief Identification strings reported by the card driver (SNDRV_CTL_IOCTL_CARD_INFO). */
+struct card_info final {
+    char id[16] = {};        ///< Short card identifier, e.g. "mt6768"
+    char driver[16] = {};    ///< Kernel driver name
+    char name[32] = {};      ///< Short card name
+    char mixername[80] = {}; ///< Mixer chip/codec name, e.g. "MT6768 Sia81xx"
+};
+
 /**
  * @brief Manages access to all ALSA mixer controls on a sound card.
  */
@@ -1288,6 +1296,12 @@ public:
 
     /** @brief Kernel control ioctl protocol version (SNDRV_CTL_IOCTL_PVERSION). */
     generic_result<protocol_version> get_protocol_version() const noexcept;
+
+    /**
+     * @brief Queries the card's identification strings (SNDRV_CTL_IOCTL_CARD_INFO).
+     * @return card_info on success; ENOENT if the mixer is not open.
+     */
+    generic_result<card_info> get_card_info() const noexcept;
 
     /**
      * @brief Creates a user-defined integer control (SNDRV_CTL_IOCTL_ELEM_ADD).

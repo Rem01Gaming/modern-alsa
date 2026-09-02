@@ -2377,6 +2377,21 @@ generic_result<protocol_version> mixer::get_protocol_version() const noexcept {
     return R{0, v};
 }
 
+generic_result<card_info> mixer::get_card_info() const noexcept {
+    using R = generic_result<card_info>;
+    if (!self || self->fd == invalid_fd()) return R{ENOENT};
+
+    snd_ctl_card_info native_info{};
+    if (ioctl(self->fd, SNDRV_CTL_IOCTL_CARD_INFO, &native_info) < 0) return R{errno};
+
+    card_info info;
+    memcpy(info.id, native_info.id, std::min(sizeof(info.id), sizeof(native_info.id)));
+    memcpy(info.driver, native_info.driver, std::min(sizeof(info.driver), sizeof(native_info.driver)));
+    memcpy(info.name, native_info.name, std::min(sizeof(info.name), sizeof(native_info.name)));
+    memcpy(info.mixername, native_info.mixername, std::min(sizeof(info.mixername), sizeof(native_info.mixername)));
+    return R{0, info};
+}
+
 result mixer::add_integer_control(const char *name, long min, long max, long step, size_type count) noexcept {
     if (!self || self->fd == invalid_fd()) return {ENOENT};
     if (!name || count == 0 || count > 128) return {EINVAL};
