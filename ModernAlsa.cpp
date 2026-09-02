@@ -338,7 +338,10 @@ constexpr int to_alsa_format(sample_format sf) noexcept {
         case sample_format::dsd_u32_le: return SNDRV_PCM_FORMAT_DSD_U32_LE;
         case sample_format::dsd_u32_be: return SNDRV_PCM_FORMAT_DSD_U32_BE;
     }
-    return 0;
+
+    // This internal helper is only ever called with library-constructed values
+    std::unreachable();
+    // return 0;
 }
 
 constexpr int to_alsa_access(sample_access access) noexcept {
@@ -348,7 +351,10 @@ constexpr int to_alsa_access(sample_access access) noexcept {
         case sample_access::mmap_interleaved: return SNDRV_PCM_ACCESS_MMAP_INTERLEAVED;
         case sample_access::mmap_non_interleaved: return SNDRV_PCM_ACCESS_MMAP_NONINTERLEAVED;
     }
-    return 0;
+
+    // This internal helper is only ever called with library-constructed values
+    std::unreachable();
+    // return 0;
 }
 
 constexpr snd_pcm_hw_params to_alsa_hw_params(const pcm_config &config, sample_access access) noexcept {
